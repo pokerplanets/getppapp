@@ -1,0 +1,88 @@
+name: Deploy App
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target Environment'
+        required: true
+        default: 'prod'
+        type: choice
+        options:
+        - test
+        - prod
+
+env:
+  TEST_BUCKET: test.getpp.app
+  PROD_BUCKET: getpp.app
+  BUILD_DIR: 'dist'
+  INDEX_PAGE: 'index.html'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.BUILD_DIR }}
+        path: ${{ env.BUILD_DIR }}
+
+  deploy-test:
+    needs: build
+    name: Deploy to Test
+    # Auto-deploy on push to main, or manual trigger for 'test'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'test')
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ env.BUILD_DIR }}
+        path: ${{ env.BUILD_DIR }}
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Deploy to Test Bucket
+      run: |
+        gsutil -m rsync -R -d ${{ env.BUILD_DIR }} gs://${{ env.TEST_BUCKET }}
+        # Set cache control for index.html to ensure no caching for updates
+        gsutil setmeta -h "Cache-Control:no-cache, max-age=0" gs://${{ env.TEST_BUCKET }}/${{ env.INDEX_PAGE }}
+
+  deploy-prod:
+    needs: build
+    name: Deploy to Prod
+    # Only manual trigger for 'prod'
+    if: github.event_name == 'workflow_dispatch' && inputs.environment == 'prod'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ env.BUILD_DIR }}
+        path: ${{ env.BUILD_DIR }}
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Deploy to Prod Bucket
+      run: |
+        gsutil -m rsync -R -d ${{ env.BUILD_DIR }} gs://${{ env.PROD_BUCKET }}
+        # Set cache control for index.html to ensure no caching for updates
+        gsutil setmeta -h "Cache-Control:no-cache, max-age=0" gs://${{ env.PROD_BUCKET }}/${{ env.INDEX_PAGE }}
